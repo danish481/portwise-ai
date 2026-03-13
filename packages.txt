@@ -1,2 +1,4 @@
 tesseract-ocr
 ffmpeg
+libasound2-dev
+portaudio19-dev
