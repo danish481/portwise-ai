@@ -348,16 +348,27 @@ elif page == "📄 Document Intelligence":
 
     with tab_upload:
         _section("Upload Document")
+        
+        # 1. Initialize the state memory for this session
+        if "doc_result" not in st.session_state:
+            st.session_state.doc_result = None
+
         uploaded = st.file_uploader(
             "Upload a maritime document",
             type=["pdf", "png", "jpg", "jpeg", "txt"],
             help="Supports PDF (text + scanned), images (OCR), and plain text.",
         )
+        
+        # 2. If the user clears the file, clear the memory
+        if not uploaded:
+            st.session_state.doc_result = None
+
         doc_type_hint = st.selectbox(
             "Document type hint (optional — auto-detected if blank)",
             ["Auto-detect", "bol", "manifest", "dg_declaration"],
         )
 
+        # 3. Only run extraction if the button is clicked
         if uploaded and st.button("⚡ Extract Data", type="primary"):
             import tempfile, os
             suffix = "." + uploaded.name.rsplit(".", 1)[-1]
@@ -369,10 +380,14 @@ elif page == "📄 Document Intelligence":
                 processor = _load_document_processor()
                 hint = None if doc_type_hint == "Auto-detect" else doc_type_hint
                 try:
-                    result = processor.process_document(tmp_path, hint)
+                    # STORE the result in session_state, don't just put it in a local variable
+                    st.session_state.doc_result = processor.process_document(tmp_path, hint)
                 finally:
                     os.unlink(tmp_path)
 
+        # 4. Render the UI based on MEMORY, not the button click
+        if st.session_state.doc_result:
+            result = st.session_state.doc_result
             data = result.get("extracted_data", {})
             conf = data.get("extract_confidence", 0.0)
 
@@ -383,7 +398,6 @@ elif page == "📄 Document Intelligence":
             c3.metric("Document ID", result.get("document_id", "—"))
 
             st.markdown("---")
-
             doc_t = result.get("document_type", "unknown")
 
             if doc_t == "bol":
@@ -452,7 +466,7 @@ elif page == "📄 Document Intelligence":
                 with st.expander("📋 Raw Extracted Data", expanded=True):
                     st.json(data)
 
-            # AI enhancement (if key configured)
+            # 5. Because the data is in memory, this button will now work perfectly!
             if config.llm_ready:
                 st.markdown("---")
                 if st.button("🤖 Enhance with AI Analysis"):
