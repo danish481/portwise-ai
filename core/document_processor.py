@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 import hashlib
+import base64
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -14,6 +15,11 @@ from datetime import datetime
 import pdfplumber
 from PIL import Image, ImageFilter, ImageEnhance
 import pytesseract
+
+# LangChain / Gemini Vision Imports
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage
+from core.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +73,7 @@ class ExtractedParties:
 
 @dataclass
 class BillOfLadingData:
-    document_type: str = "Bill of Lading"
+    document_type: str = "bol"
     bol_number: Optional[str] = None
     booking_number: Optional[str] = None
     vessel: ExtractedVessel = None
@@ -96,8 +102,7 @@ class BillOfLadingData:
 
 
 # ---------------------------------------------------------------------------
-# BIC-registered owner-code prefixes (partial list of major carriers)
-# Used to reduce false-positive container number matches.
+# BIC-registered owner-code prefixes
 # ---------------------------------------------------------------------------
 _KNOWN_OWNER_CODES = frozenset({
     "MSCU", "MAEU", "CMAU", "HLCU", "EGLV", "OOLU", "CSNU", "YMLU",
@@ -106,7 +111,6 @@ _KNOWN_OWNER_CODES = frozenset({
     "MATU", "GESU", "KNLU", "INBU", "HDMU", "ZIMU", "REGU", "SGCU",
 })
 
-# Known port codes → human-readable names
 PORT_MAPPING: Dict[str, str] = {
     "INBOM": "Mumbai",
     "INMAA": "Chennai",
@@ -125,7 +129,6 @@ PORT_MAPPING: Dict[str, str] = {
     "AUPOR": "Port Botany",
 }
 
-# Port label keywords → field mapping priority
 _POL_KEYWORDS = frozenset({"port of loading", "pol", "load port", "loading port"})
 _POD_KEYWORDS = frozenset({"port of discharge", "pod", "discharge port", "destination port"})
 _RECEIPT_KEYWORDS = frozenset({"place of receipt", "por", "receipt"})
@@ -139,13 +142,10 @@ _DELIVERY_KEYWORDS = frozenset({"place of delivery", "final destination", "deliv
 class MaritimeDocumentProcessor:
     """
     Advanced document processor for maritime shipping documents.
-    Supports PDF, images (OCR), and plain text.
+    Supports native LLM Vision API for images, falling back to legacy OCR/Regex for PDFs.
     """
 
     PATTERNS = {
-        # ISO 6346: 3-letter owner code + 'U' + 6-digit serial + 1 check digit
-        # We require all 11 chars to be present and accept any owner code in text
-        # (owner code whitelist is applied separately to reduce false positives)
         "container_number": r"\b([A-Z]{3}[UJZ]\d{7})\b",
         "bol_number": r"(?:B/L\s*(?:No\.?|Number)?|BOL\s*(?:No\.?|Number)?|Bill\s+of\s+Lading\s*(?:No\.?)?)[\s#:]+([A-Z0-9][\w\-]{2,20})",
         "vessel_name": r"Vessel\s+Name[\s:]+([A-Za-z][^\n\r,]{2,50})",
@@ -171,18 +171,32 @@ class MaritimeDocumentProcessor:
     def process_document(
         self, file_path: str, doc_type: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        Process a maritime document and extract structured data.
+        """Process a maritime document via Gemini Vision or Legacy extraction."""
+        
+        lower = file_path.lower()
+        is_image = lower.endswith((".png", ".jpg", ".jpeg", ".tiff", ".bmp"))
 
-        Args:
-            file_path: Path to the document (PDF, image, or text file).
-            doc_type:  Optional hint: 'bol', 'manifest', 'dg_declaration'.
+        # 1. ATTEMPT GEMINI VISION FIRST (For images)
+        if is_image and config.llm_ready:
+            logger.info("Image detected. Routing directly to Gemini Vision API...")
+            vision_data = self._extract_with_gemini_vision(file_path)
+            
+            if vision_data and vision_data.get("document_type") != "unknown":
+                result = {
+                    "document_id": hashlib.md5(file_path.encode()).hexdigest()[:12],
+                    "processed_at": datetime.now().isoformat(),
+                    "file_path": file_path,
+                    "document_type": vision_data.get("document_type", "bol"),
+                    "extracted_data": vision_data,
+                    "raw_text_preview": "Extracted natively via Gemini 1.5 Flash Vision API.",
+                }
+                self.processed_documents.append(result)
+                return result
+            else:
+                logger.warning("Vision extraction failed or returned unknown. Falling back to legacy OCR.")
 
-        Returns:
-            Dict with extracted data, confidence, and metadata.
-        """
+        # 2. FALLBACK TO LEGACY REGEX PIPELINE
         raw_text = self._read_file(file_path)
-
         if not doc_type:
             doc_type = self._detect_document_type(raw_text)
 
@@ -206,11 +220,69 @@ class MaritimeDocumentProcessor:
         return result
 
     # ------------------------------------------------------------------
-    # File reading
+    # GEMINI VISION EXTRACTOR
+    # ------------------------------------------------------------------
+
+    def _extract_with_gemini_vision(self, file_path: str) -> Dict[str, Any]:
+        """Bypasses Tesseract and uses Gemini Vision for native data mapping."""
+        try:
+            llm = ChatGoogleGenerativeAI(
+                model=config.GEMINI_MODEL, 
+                temperature=0.0 # Deterministic structured output
+            )
+
+            with open(file_path, "rb") as image_file:
+                image_data = base64.b64encode(image_file.read()).decode("utf-8")
+
+            prompt = """
+            You are an expert maritime document extraction system.
+            Analyze this image (likely a Bill of Lading, Manifest, or DG Declaration) and extract the data into a strict JSON format.
+            Ignore background watermarks like 'ORIGINAL' or 'COPY'.
+            Extract the data exactly as it appears. Ensure numbers like weight are parsed as floats.
+
+            Return ONLY a valid JSON object matching this exact schema (use null if not found):
+            {
+              "document_type": "bol", 
+              "bol_number": "",
+              "booking_number": "",
+              "issue_date": "",
+              "freight_terms": "",
+              "vessel": {"vessel_name": "", "voyage_number": "", "imo_number": ""},
+              "ports": {"port_of_loading": "", "port_of_discharge": "", "place_of_receipt": "", "place_of_delivery": ""},
+              "parties": {"shipper_name": "", "consignee_name": "", "notify_party": "", "carrier_name": ""},
+              "containers": [
+                 {"container_number": "", "container_type": "20'DC", "weight_kg": 0.0, "seal_number": "", "is_dangerous_goods": false}
+              ],
+              "extract_confidence": 0.98
+            }
+            """
+
+            message = HumanMessage(
+                content=[
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
+                ]
+            )
+
+            response = llm.invoke([message])
+            clean_text = response.content.replace("```json", "").replace("```", "").strip()
+            data = json.loads(clean_text)
+
+            # Ensure extract_confidence exists for the UI
+            if "extract_confidence" not in data:
+                data["extract_confidence"] = 0.95
+
+            return data
+
+        except Exception as e:
+            logger.error(f"Gemini Vision extraction failed: {e}")
+            return {}
+
+    # ------------------------------------------------------------------
+    # File reading (Legacy)
     # ------------------------------------------------------------------
 
     def _read_file(self, file_path: str) -> str:
-        """Dispatch to the appropriate reader based on file extension."""
         lower = file_path.lower()
         if lower.endswith(".pdf"):
             return self._extract_from_pdf(file_path)
@@ -224,123 +296,77 @@ class MaritimeDocumentProcessor:
             return ""
 
     def _extract_from_pdf(self, file_path: str) -> str:
-        """Extract text from PDF using pdfplumber, with password-protection guard."""
         try:
             with pdfplumber.open(file_path) as pdf:
-                if pdf.metadata.get("Encrypt"):
-                    logger.warning("PDF %s is encrypted; text extraction may be incomplete.", file_path)
-                pages = []
-                for page in pdf.pages:
-                    text = page.extract_text()
-                    if text:
-                        pages.append(text)
+                pages = [page.extract_text() for page in pdf.pages if page.extract_text()]
                 return "\n".join(pages)
         except Exception as exc:
             logger.exception("PDF extraction error for %s: %s", file_path, exc)
             return f"[PDF extraction error: {exc}]"
 
     def _extract_from_image(self, file_path: str) -> str:
-        """
-        Extract text from an image using Tesseract OCR with pre-processing
-        to improve accuracy on scanned maritime documents.
-        """
         try:
-            img = Image.open(file_path).convert("L")  # greyscale
+            img = Image.open(file_path).convert("L")
             img = ImageEnhance.Contrast(img).enhance(2.0)
             img = img.filter(ImageFilter.SHARPEN)
-            # PSM 6: assume a uniform block of text (good for structured docs)
-            text = pytesseract.image_to_string(img, config="--psm 6 --oem 3")
-            return text
+            return pytesseract.image_to_string(img, config="--psm 6 --oem 3")
         except Exception as exc:
             logger.exception("OCR extraction error for %s: %s", file_path, exc)
             return f"[Image OCR error: {exc}]"
 
     # ------------------------------------------------------------------
-    # Document type detection
+    # Document type detection (Legacy)
     # ------------------------------------------------------------------
 
     def _detect_document_type(self, text: str) -> str:
-        """Score the text against known document type indicators."""
         t = text.lower()
-        scores = {
-            "bol": 0,
-            "manifest": 0,
-            "dg_declaration": 0,
-            "port_call_report": 0,
-        }
+        scores = {"bol": 0, "manifest": 0, "dg_declaration": 0, "port_call_report": 0}
 
-        # BOL
         for kw in ("bill of lading", "b/l number", "bol number", "shipper", "consignee"):
-            if kw in t:
-                scores["bol"] += 2
-        if "vessel" in t and "container" in t:
-            scores["bol"] += 1
+            if kw in t: scores["bol"] += 2
+        if "vessel" in t and "container" in t: scores["bol"] += 1
 
-        # Manifest
         for kw in ("cargo manifest", "container manifest", "manifest number"):
-            if kw in t:
-                scores["manifest"] += 3
-        if "manifest" in t:
-            scores["manifest"] += 1
+            if kw in t: scores["manifest"] += 3
+        if "manifest" in t: scores["manifest"] += 1
 
-        # DG Declaration
         for kw in ("dangerous goods", "dg declaration", "imdg", "un number", "proper shipping name", "packing group"):
-            if kw in t:
-                scores["dg_declaration"] += 2
+            if kw in t: scores["dg_declaration"] += 2
 
-        # Port Call Report
         for kw in ("port call", "arrival time", "departure time", "bunkering", "berth"):
-            if kw in t:
-                scores["port_call_report"] += 2
+            if kw in t: scores["port_call_report"] += 2
 
         best = max(scores, key=scores.get)
         return best if scores[best] > 0 else "unknown"
 
     # ------------------------------------------------------------------
-    # Extractors
+    # Extractors (Legacy)
     # ------------------------------------------------------------------
 
     def _extract_bol_data(self, text: str) -> Dict[str, Any]:
         bol = BillOfLadingData(raw_text=text)
 
-        m = re.search(self.PATTERNS["bol_number"], text, re.IGNORECASE)
-        if m:
-            bol.bol_number = m.group(1).strip()
+        for key, attr in [("bol_number", "bol_number"), ("booking_number", "booking_number")]:
+            m = re.search(self.PATTERNS[key], text, re.IGNORECASE)
+            if m: setattr(bol, attr, m.group(1).strip())
 
-        m = re.search(self.PATTERNS["booking_number"], text, re.IGNORECASE)
-        if m:
-            bol.booking_number = m.group(1).strip()
-
-        m = re.search(self.PATTERNS["vessel_name"], text, re.IGNORECASE)
-        if m:
-            bol.vessel.vessel_name = m.group(1).strip()
-
-        m = re.search(self.PATTERNS["voyage_number"], text, re.IGNORECASE)
-        if m:
-            bol.vessel.voyage_number = m.group(1).strip()
-
-        m = re.search(self.PATTERNS["imo_number"], text, re.IGNORECASE)
-        if m:
-            bol.vessel.imo_number = m.group(1).strip()
+        for key, attr in [("vessel_name", "vessel_name"), ("voyage_number", "voyage_number"), ("imo_number", "imo_number")]:
+            m = re.search(self.PATTERNS[key], text, re.IGNORECASE)
+            if m: setattr(bol.vessel, attr, m.group(1).strip())
 
         m = re.search(self.PATTERNS["incoterm"], text)
-        if m:
-            bol.incoterm = m.group(1)
+        if m: bol.incoterm = m.group(1)
 
         dates = re.findall(self.PATTERNS["date"], text)
-        if dates:
-            bol.issue_date = dates[0]
-        if len(dates) > 1:
-            bol.onboard_date = dates[1]
+        if dates: bol.issue_date = dates[0]
+        if len(dates) > 1: bol.onboard_date = dates[1]
 
         bol.containers = self._extract_containers(text)
         bol.ports = self._extract_ports(text)
         bol.parties = self._extract_parties(text)
 
-        # Freight terms
         m = re.search(r"(Prepaid|Collect|As\s+Arranged)", text, re.IGNORECASE)
-        if m:
-            bol.freight_terms = m.group(1)
+        if m: bol.freight_terms = m.group(1)
 
         bol.extract_confidence = self._calculate_bol_confidence(bol)
         return bol.to_dict()
@@ -366,7 +392,6 @@ class MaritimeDocumentProcessor:
         imdg_classes = list(set(re.findall(self.PATTERNS["imdg_class"], text, re.IGNORECASE)))
         containers = self._extract_containers(text)
 
-        # Proper shipping names: look for the label then grab the next non-empty line
         shipping_names: List[str] = []
         lines = text.split("\n")
         for i, line in enumerate(lines):
@@ -377,7 +402,6 @@ class MaritimeDocumentProcessor:
                         shipping_names.append(candidate)
                         break
 
-        # Packing groups
         packing_groups = list(set(re.findall(r"Packing\s+Group[\s:]+([I]{1,3})", text, re.IGNORECASE)))
 
         return {
@@ -402,33 +426,22 @@ class MaritimeDocumentProcessor:
         }
 
     # ------------------------------------------------------------------
-    # Sub-extractors
+    # Sub-extractors (Legacy)
     # ------------------------------------------------------------------
 
     def _extract_containers(self, text: str) -> List[ExtractedContainer]:
-        """
-        Extract container numbers, preferring BIC-registered owner codes.
-        Falls back to accepting any valid format if none match the whitelist.
-        """
         all_matches = list(set(re.findall(self.PATTERNS["container_number"], text)))
-
-        # Prefer known owner codes; if none found, accept all matches
         known = [c for c in all_matches if c[:4] in _KNOWN_OWNER_CODES]
         candidates = known if known else all_matches
 
         containers: List[ExtractedContainer] = []
         for num in candidates:
-            valid, _ = self.validate_container_number(num)
             ctype = self._detect_container_type(text, num)
-
-            # DG indicators near this container
             context = self._get_context(text, num, window=300)
             is_dg = bool(re.search(r"\bUN\s*\d{4}|dangerous\s+goods|IMDG", context, re.IGNORECASE))
             un_match = re.search(self.PATTERNS["un_number"], context)
             imdg_match = re.search(self.PATTERNS["imdg_class"], context, re.IGNORECASE)
-            seal_match = re.search(
-                rf"{re.escape(num)}.*?Seal[\s#:]+([A-Z0-9\-]+)", text, re.DOTALL | re.IGNORECASE
-            )
+            seal_match = re.search(rf"{re.escape(num)}.*?Seal[\s#:]+([A-Z0-9\-]+)", text, re.DOTALL | re.IGNORECASE)
             weight_match = re.search(self.PATTERNS["weight"], context)
 
             containers.append(ExtractedContainer(
@@ -440,54 +453,37 @@ class MaritimeDocumentProcessor:
                 un_number=un_match.group(1) if un_match else None,
                 imdg_class=imdg_match.group(1) if imdg_match else None,
             ))
-
         return containers
 
     def _detect_container_type(self, text: str, container_num: str) -> str:
         context = self._get_context(text, container_num, window=200).lower()
-        if any(t in context for t in ("reefer", "refrigerated", "20'rf", "40'rf", "rf")):
-            return "40'RF"
-        if any(t in context for t in ("tank", "isotank", "20'tk")):
-            return "20'TK"
-        if any(t in context for t in ("open top", "40'ot", "ot")):
-            return "40'OT"
-        if any(t in context for t in ("flat rack", "40'fr", "fr")):
-            return "40'FR"
-        if "40" in context and "hc" in context:
-            return "40'HC"
-        if "40" in context:
-            return "40'DC"
-        if "20" in context:
-            return "20'DC"
-        return "20'DC"  # safe default
+        if any(t in context for t in ("reefer", "refrigerated", "20'rf", "40'rf", "rf")): return "40'RF"
+        if any(t in context for t in ("tank", "isotank", "20'tk")): return "20'TK"
+        if any(t in context for t in ("open top", "40'ot", "ot")): return "40'OT"
+        if any(t in context for t in ("flat rack", "40'fr", "fr")): return "40'FR"
+        if "40" in context and "hc" in context: return "40'HC"
+        if "40" in context: return "40'DC"
+        if "20" in context: return "20'DC"
+        return "20'DC"
 
     def _get_context(self, text: str, token: str, window: int = 200) -> str:
         pos = text.find(token)
-        if pos < 0:
-            return ""
+        if pos < 0: return ""
         return text[max(0, pos - window): pos + len(token) + window]
 
     def _extract_ports(self, text: str) -> ExtractedPorts:
-        """
-        Extract port names using label-proximity scoring.
-        Each label keyword is found first; the port name on the same or next line wins.
-        """
         ports = ExtractedPorts()
         lines = text.split("\n")
 
         def _find_after_label(keywords: frozenset) -> Optional[str]:
             for i, line in enumerate(lines):
-                ll = line.lower()
-                if any(kw in ll for kw in keywords):
-                    # Value may be on the same line (after colon) or the next line
+                if any(kw in line.lower() for kw in keywords):
                     if ":" in line:
-                        value = line.split(":", 1)[1].strip()
-                        if value:
-                            return value
+                        val = line.split(":", 1)[1].strip()
+                        if val: return val
                     if i + 1 < len(lines):
                         nxt = lines[i + 1].strip()
-                        if nxt:
-                            return nxt
+                        if nxt: return nxt
             return None
 
         ports.port_of_loading = _find_after_label(_POL_KEYWORDS)
@@ -495,58 +491,32 @@ class MaritimeDocumentProcessor:
         ports.place_of_receipt = _find_after_label(_RECEIPT_KEYWORDS)
         ports.place_of_delivery = _find_after_label(_DELIVERY_KEYWORDS)
 
-        # Also map UN/LOCODE codes found in text
         codes = re.findall(self.PATTERNS["port_code"], text)
         for code in codes:
             if code in PORT_MAPPING:
                 name = PORT_MAPPING[code]
-                if not ports.port_of_loading:
-                    ports.port_of_loading = name
-                elif not ports.port_of_discharge and name != ports.port_of_loading:
-                    ports.port_of_discharge = name
+                if not ports.port_of_loading: ports.port_of_loading = name
+                elif not ports.port_of_discharge and name != ports.port_of_loading: ports.port_of_discharge = name
                 elif name not in (ports.port_of_loading, ports.port_of_discharge):
-                    if name not in ports.transshipment_ports:
-                        ports.transshipment_ports.append(name)
-
+                    if name not in ports.transshipment_ports: ports.transshipment_ports.append(name)
         return ports
 
     def _extract_parties(self, text: str) -> ExtractedParties:
-        """
-        Extract party names by scanning for label keywords then reading the
-        value that follows (on the same line after a colon, or on subsequent lines).
-        Handles addresses that may themselves contain colons.
-        """
         parties = ExtractedParties()
         lines = text.split("\n")
-
-        _label_map = {
-            "shipper": "shipper",
-            "consignee": "consignee",
-            "notify": "notify_party",
-            "carrier": "carrier",
-        }
+        _label_map = {"shipper": "shipper", "consignee": "consignee", "notify": "notify_party", "carrier": "carrier"}
 
         i = 0
         while i < len(lines):
             ll = lines[i].lower().strip()
             for keyword, field_name in _label_map.items():
                 if keyword in ll:
-                    # Extract value from same line if colon present
-                    if ":" in lines[i]:
-                        parts = lines[i].split(":", 1)
-                        value = parts[1].strip()
-                    else:
-                        value = ""
-
-                    # Collect continuation lines (address) until another label or blank
+                    value = lines[i].split(":", 1)[1].strip() if ":" in lines[i] else ""
                     addr_lines = [value] if value else []
                     j = i + 1
                     while j < len(lines):
                         nxt = lines[j].strip()
-                        if not nxt:
-                            break
-                        if any(kw in nxt.lower() for kw in _label_map):
-                            break
+                        if not nxt or any(kw in nxt.lower() for kw in _label_map): break
                         addr_lines.append(nxt)
                         j += 1
 
@@ -554,29 +524,16 @@ class MaritimeDocumentProcessor:
                     if full:
                         if field_name == "shipper":
                             parties.shipper_name = addr_lines[0] if addr_lines else full
-                            if len(addr_lines) > 1:
-                                parties.shipper_address = " ".join(addr_lines[1:])
+                            if len(addr_lines) > 1: parties.shipper_address = " ".join(addr_lines[1:])
                         elif field_name == "consignee":
                             parties.consignee_name = addr_lines[0] if addr_lines else full
-                            if len(addr_lines) > 1:
-                                parties.consignee_address = " ".join(addr_lines[1:])
-                        elif field_name == "notify_party":
-                            parties.notify_party = full
-                        elif field_name == "carrier":
-                            parties.carrier_name = full
+                            if len(addr_lines) > 1: parties.consignee_address = " ".join(addr_lines[1:])
+                        elif field_name == "notify_party": parties.notify_party = full
+                        elif field_name == "carrier": parties.carrier_name = full
             i += 1
-
         return parties
 
-    # ------------------------------------------------------------------
-    # Confidence scoring
-    # ------------------------------------------------------------------
-
     def _calculate_bol_confidence(self, bol: BillOfLadingData) -> float:
-        """
-        Compute a confidence score (0–1) based on how many key fields were extracted.
-        Weights reflect how reliably each field can be found in a real BOL.
-        """
         checks = [
             (bol.bol_number is not None, 0.20),
             (bol.vessel.vessel_name is not None, 0.15),
@@ -593,50 +550,24 @@ class MaritimeDocumentProcessor:
     # ------------------------------------------------------------------
 
     def validate_container_number(self, container_num: str) -> Tuple[bool, str]:
-        """
-        Validate a container number using the ISO 6346 check-digit algorithm.
-
-        Returns:
-            (is_valid, message)
-        """
         cn = container_num.strip().upper()
+        if len(cn) != 11: return False, f"Container number must be 11 characters (got {len(cn)})"
+        
+        owner_code, category, serial, check_char = cn[:3], cn[3], cn[4:10], cn[10]
+        if not owner_code.isalpha(): return False, "Owner code (first 3 chars) must be letters"
+        if category not in ("U", "J", "Z"): return False, f"Category identifier must be U, J, or Z (got '{category}')"
+        if not serial.isdigit(): return False, "Serial number (chars 5–10) must be 6 digits"
+        if not check_char.isdigit(): return False, "Check digit (char 11) must be a digit"
 
-        if len(cn) != 11:
-            return False, f"Container number must be 11 characters (got {len(cn)})"
-
-        owner_code = cn[:3]
-        category = cn[3]
-        serial = cn[4:10]
-        check_char = cn[10]
-
-        if not owner_code.isalpha():
-            return False, "Owner code (first 3 chars) must be letters"
-
-        if category not in ("U", "J", "Z"):
-            return False, f"Category identifier must be U, J, or Z (got '{category}')"
-
-        if not serial.isdigit():
-            return False, "Serial number (chars 5–10) must be 6 digits"
-
-        if not check_char.isdigit():
-            return False, "Check digit (char 11) must be a digit"
-
-        # Letter-to-value mapping (A=10, B=12, …, skipping multiples of 11)
         def _letter_value(ch: str) -> int:
             base = ord(ch) - ord("A") + 10
-            # Skip values that are multiples of 11 (ISO 6346 rule)
             return base + base // 10
 
-        total = 0
-        for pos, ch in enumerate(cn[:10]):
-            val = _letter_value(ch) if ch.isalpha() else int(ch)
-            total += val * (2 ** pos)
-
+        total = sum((_letter_value(ch) if ch.isalpha() else int(ch)) * (2 ** pos) for pos, ch in enumerate(cn[:10]))
         remainder = total % 11
         expected = 0 if remainder == 10 else remainder
 
-        if str(expected) == check_char:
-            return True, "Valid container number"
+        if str(expected) == check_char: return True, "Valid container number"
         return False, f"Invalid check digit — expected {expected}, got {check_char}"
 
     # ------------------------------------------------------------------
@@ -656,7 +587,7 @@ _processor_lock = threading.Lock()
 
 
 def get_document_processor() -> MaritimeDocumentProcessor:
-    """Return the shared document processor instance (thread-safe, lazy-initialised)."""
+    """Return the shared document processor instance."""
     global _processor
     if _processor is None:
         with _processor_lock:
