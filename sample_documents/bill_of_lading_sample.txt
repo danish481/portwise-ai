@@ -1,0 +1,88 @@
+BILL OF LADING
+
+B/L Number: BOL-2024-8892
+Booking Number: BK-2024-554321
+
+------------------------------------------------------------------------
+SHIPPER
+Name: ABC Exports Pvt Ltd
+Address: 123 Industrial Area, Andheri East, Mumbai 400069, India
+Contact: +91-22-1234-5678 | exports@abcexports.com
+
+CONSIGNEE
+Name: European Imports BV
+Address: 456 Trade Center, Rotterdam 3011, Netherlands
+Contact: +31-10-9876-5432 | imports@europeanbv.nl
+
+NOTIFY PARTY
+Same as Consignee
+
+------------------------------------------------------------------------
+VESSEL INFORMATION
+Vessel Name: MV PACIFIC STAR
+Voyage Number: PS247N
+IMO Number: 9876543
+Flag: Singapore
+
+------------------------------------------------------------------------
+PORT INFORMATION
+Place of Receipt: Mumbai, India
+Port of Loading: Mumbai (INBOM)
+Port of Discharge: Rotterdam (NLRTM)
+Place of Delivery: Rotterdam, Netherlands
+
+------------------------------------------------------------------------
+CONTAINER DETAILS
+
+Container 1:
+- Container Number: MSCU7894562
+- Type: 40' High Cube (40'HC)
+- Seal Number: SL98234
+- Gross Weight: 28500 KGS
+- Cargo Description: Electronic Components - HS Code 8541.10
+- Marks & Numbers: ABC-2024-001
+
+Container 2:
+- Container Number: MSCU7894563
+- Type: 40' Dry Container (40'DC)
+- Seal Number: SL98235
+- Gross Weight: 25200 KGS
+- Cargo Description: Textile Products - HS Code 6203.42
+- Marks & Numbers: ABC-2024-002
+
+Container 3:
+- Container Number: MSCU7894564
+- Type: 20' Reefer (20'RF)
+- Seal Number: SL98236
+- Gross Weight: 18000 KGS
+- Cargo Description: Frozen Seafood - Temperature: -18 degrees C - HS Code 0303.79
+- Marks & Numbers: ABC-2024-003
+
+------------------------------------------------------------------------
+FREIGHT & CHARGES
+Freight Terms: Prepaid
+Incoterm: CIF (Cost, Insurance, Freight)
+Freight Amount: USD 4500.00
+
+------------------------------------------------------------------------
+DATES
+Date of Issue: 10/12/2024
+Onboard Date: 12/12/2024
+Estimated Departure: 12 December 2024 18:00 hrs
+Estimated Arrival (ETA): 03 January 2025 08:00 hrs
+
+------------------------------------------------------------------------
+DECLARATION
+Shipper declares that the particulars furnished above are correct.
+This Bill of Lading is subject to the terms and conditions of the carrier.
+
+For ABC Exports Pvt Ltd
+Authorized Signatory: ___________________
+Date: 10 December 2024
+
+For Carrier: Pacific Star Shipping Lines
+Authorized Signatory: ___________________
+Date: 10 December 2024
+
+------------------------------------------------------------------------
+END OF BILL OF LADING

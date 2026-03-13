@@ -1,0 +1,106 @@
+DANGEROUS GOODS DECLARATION
+
+Shipper's Declaration: I hereby declare that the contents of this consignment are fully
+and accurately described below by the proper shipping name, and are classified,
+packaged, marked and labelled/placarded, and are in all respects in proper condition
+for transport according to applicable international and national governmental regulations.
+
+------------------------------------------------------------------------
+SHIPPER
+Name: Chemical Solutions Ltd
+Address: 789 Chemical Park, MIDC, Mumbai 400078, India
+Contact: +91-22-8765-4321 | dg@chemicalsolutions.com
+Emergency Contact: +91-98765-43210 (24/7)
+
+CONSIGNEE
+Name: Industrial Chemicals GmbH
+Address: 321 Chemical District, Hamburg 20095, Germany
+Contact: +49-40-1234-5678
+
+------------------------------------------------------------------------
+TRANSPORT DETAILS
+Vessel Name: MV CHEMICAL CARRIER
+Voyage Number: CC089N
+Port of Loading: Mumbai (INBOM)
+Port of Discharge: Hamburg (DEHAM)
+
+------------------------------------------------------------------------
+DANGEROUS GOODS INFORMATION
+
+Item 1:
+- UN Number: UN2348
+- Proper Shipping Name:
+  BUTYRALDEHYDE
+- Class/Division: Class 3
+- Packing Group: II
+- Subsidiary Risk: None
+- Quantity: 5000 KGS
+- Type of Packaging: Steel Drums (200L each)
+- Number of Packages: 25 drums
+- Container Number: TGHU1234567
+- Flash Point: -7 degrees C
+- Marine Pollutant: No
+- EMS: F-E, S-D
+
+Item 2:
+- UN Number: UN1993
+- Proper Shipping Name:
+  FLAMMABLE LIQUID, N.O.S. (Contains Ethanol Solution)
+- Class/Division: Class 3
+- Packing Group: III
+- Subsidiary Risk: None
+- Quantity: 2000 KGS
+- Type of Packaging: Plastic Drums (50L each)
+- Number of Packages: 40 drums
+- Container Number: TGHU1234567
+- Flash Point: 14 degrees C
+- Marine Pollutant: No
+- EMS: F-E, S-D
+
+------------------------------------------------------------------------
+CONTAINER INFORMATION
+Container Number: TGHU1234567
+Container Type: 20' Tank Container (20'TK)
+Seal Number: DG998877
+Tare Weight: 3650 KGS
+Gross Weight: 10650 KGS
+
+------------------------------------------------------------------------
+ADDITIONAL INFORMATION
+Stowage Category: On deck or under deck
+Segregation Group: None
+Special Provisions: 144, 223
+Limited Quantity: No
+Excepted Quantity: No
+
+------------------------------------------------------------------------
+DECLARATIONS & CERTIFICATIONS
+
+[X] Material Safety Data Sheet (MSDS) attached
+[X] Packing Certificate provided
+[X] Emergency Response Guidebook reference provided
+[X] Shipper's DG training certificate valid
+[X] Container properly labelled and placarded
+
+------------------------------------------------------------------------
+RESPONSIBLE PERSONS
+
+Shipper's Representative:
+Name: Rajesh Kumar
+Title: DG Compliance Officer
+Signature: ___________________
+Date: 08 December 2024
+Place: Mumbai, India
+
+Carrier's Representative:
+Name: Captain John Smith
+Title: Master, MV Chemical Carrier
+Signature: ___________________
+Date: 10 December 2024
+Place: Mumbai, India
+
+------------------------------------------------------------------------
+WARNING: This shipment contains dangerous goods. Handle with extreme care.
+Emergency Procedures: Refer to EMS codes F-E, S-D
+
+END OF DANGEROUS GOODS DECLARATION

@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+venv/
+ENV/
+env/
+.venv/
+
+# Testing / Linters (NEW)
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# Jupyter Notebooks (NEW)
+.ipynb_checkpoints/
+
+# Environment
+.env
+.env.local
+.env.* # (NEW) Catches .env.development, .env.test, etc.
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~      # (NEW) Catches standard text editor backup files
+
+# OS / System (NEW)
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+logs/
+*.log
+
+# Data / DB
+data/
+chroma_db/
+*.db
+*.sqlite3
+uploads/
+temp/
+tmp/
+
+# SSL certificates — generate locally, never commit
+ssl/
+*.pem
+*.key
+*.crt
+
+# Misc
+*.bak
+.cache/
